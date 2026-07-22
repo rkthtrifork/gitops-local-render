@@ -1,0 +1,11 @@
+apiVersion: gitops-local-render.dev/v1alpha1
+kind: RenderPlan
+entrypoint:
+  path: ./application.yaml
+  renderer: raw
+sources:
+  - name: platform
+    path: ./source
+    selectors:
+      argocd:
+        - repoURL: https://github.com/example/platform.git

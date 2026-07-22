@@ -1,0 +1,22 @@
+apiVersion: gitops-local-render.dev/v1alpha1
+kind: RenderPlan
+entrypoint:
+  path: ./bootstrap.yaml
+  renderer: raw
+sources:
+  - name: platform
+    path: ./source
+    selectors:
+      flux:
+        - kind: GitRepository
+          namespace: flux-system
+          name: platform
+adapters:
+  flux:
+    seedObjects:
+      - ./vars.yaml
+    entrypoint:
+      namespace: flux-system
+      substituteFrom:
+        - kind: ConfigMap
+          name: example-vars

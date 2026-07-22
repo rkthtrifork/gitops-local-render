@@ -1,0 +1,6 @@
+/bin/
+/dist/
+/gitops-local-render
+/coverage.out
+/.tmp-*
+*.local.yaml

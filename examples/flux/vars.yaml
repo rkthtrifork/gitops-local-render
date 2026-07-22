@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example-vars
+  namespace: flux-system
+data:
+  APP_NAME: flux-example
+  APP_PATH: ./app
