@@ -10,6 +10,16 @@ spec:
   sourceRef:
     kind: GitRepository
     name: platform
+  patches:
+    - target:
+        kind: Namespace
+      patch: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ignored-by-target
+          labels:
+            app.kubernetes.io/managed-by: flux
   postBuild:
     substituteFrom:
       - kind: ConfigMap

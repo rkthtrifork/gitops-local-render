@@ -8,6 +8,11 @@ import (
 	adapterutil "github.com/rkthtrifork/gitops-local-render/internal/adapter"
 	"github.com/rkthtrifork/gitops-local-render/internal/manifest"
 	"github.com/rkthtrifork/gitops-local-render/pkg/api"
+	"gopkg.in/yaml.v3"
+	"sigs.k8s.io/kustomize/api/builtins"
+	"sigs.k8s.io/kustomize/api/hasher"
+	"sigs.k8s.io/kustomize/api/resmap"
+	"sigs.k8s.io/kustomize/api/resource"
 )
 
 const (
@@ -38,6 +43,7 @@ func (Adapter) Capabilities() []api.Capability {
 	return []api.Capability{
 		{Name: "kustomization", Description: "Discovers kustomize.toolkit.fluxcd.io/v1 Kustomizations"},
 		{Name: "post-build-substitution", Description: "Implements strict Flux envsubst with substituteFrom and inline precedence"},
+		{Name: "patches", Description: "Applies Flux inline strategic-merge and JSON 6902 patches using Kustomize semantics"},
 		{Name: "depends-on", Description: "Orders locally discovered Flux Kustomizations by dependsOn"},
 		{Name: "entrypoint-substitution", Description: "Applies an explicit bootstrap substitution scope before initial discovery"},
 	}
@@ -155,6 +161,10 @@ func (Adapter) Transform(unit api.Unit, results []api.RenderResult, store api.Ob
 	if err != nil {
 		return nil, err
 	}
+	objects, err := applyPatches(spec, results[0].Objects)
+	if err != nil {
+		return nil, err
+	}
 	postBuild := adapterutil.OptionalMap(spec["postBuild"])
 	variables, err := substitutionVariables(unit, postBuild, store)
 	if err != nil {
@@ -168,11 +178,11 @@ func (Adapter) Transform(unit api.Unit, results []api.RenderResult, store api.Ob
 		return nil, fmt.Errorf("unsupported spec.postBuild.substituteStrategy %q", strategy)
 	}
 	if len(variables) == 0 && strategy == "WithVariables" {
-		return results[0].Objects, nil
+		return objects, nil
 	}
 
-	transformed := make([]api.Object, 0, len(results[0].Objects))
-	for _, object := range results[0].Objects {
+	transformed := make([]api.Object, 0, len(objects))
+	for _, object := range objects {
 		if substitutionDisabled(object) {
 			transformed = append(transformed, object)
 			continue
@@ -198,6 +208,63 @@ func (Adapter) Transform(unit api.Unit, results []api.RenderResult, store api.Ob
 		transformed = append(transformed, objects[0])
 	}
 	return transformed, nil
+}
+
+func applyPatches(spec map[string]any, objects []api.Object) ([]api.Object, error) {
+	rawPatches, exists := spec["patches"]
+	if !exists {
+		return objects, nil
+	}
+	patches, err := adapterutil.Slice(rawPatches, "spec.patches")
+	if err != nil {
+		return nil, err
+	}
+	if len(patches) == 0 {
+		return objects, nil
+	}
+
+	data, err := manifest.Marshal(objects)
+	if err != nil {
+		return nil, err
+	}
+	resourceFactory := resource.NewFactory(&hasher.Hasher{})
+	resMapFactory := resmap.NewFactory(resourceFactory)
+	resources, err := resMapFactory.NewResMapFromBytes(data)
+	if err != nil {
+		return nil, fmt.Errorf("load resources for spec.patches: %w", err)
+	}
+	helpers := resmap.NewPluginHelpers(nil, nil, resMapFactory, nil)
+
+	for index, rawPatch := range patches {
+		patch, err := adapterutil.Map(rawPatch, fmt.Sprintf("spec.patches[%d]", index))
+		if err != nil {
+			return nil, err
+		}
+		if adapterutil.String(patch, "path") != "" {
+			return nil, fmt.Errorf("spec.patches[%d].path is unsupported; Flux patches must be inline", index)
+		}
+		config, err := yaml.Marshal(patch)
+		if err != nil {
+			return nil, fmt.Errorf("encode spec.patches[%d]: %w", index, err)
+		}
+		transformer := builtins.NewPatchTransformerPlugin()
+		if err := transformer.Config(helpers, config); err != nil {
+			return nil, fmt.Errorf("configure spec.patches[%d]: %w", index, err)
+		}
+		if err := transformer.Transform(resources); err != nil {
+			return nil, fmt.Errorf("apply spec.patches[%d]: %w", index, err)
+		}
+	}
+
+	patched, err := resources.AsYaml()
+	if err != nil {
+		return nil, fmt.Errorf("serialize resources after spec.patches: %w", err)
+	}
+	objects, err = manifest.Parse(patched)
+	if err != nil {
+		return nil, fmt.Errorf("parse resources after spec.patches: %w", err)
+	}
+	return objects, nil
 }
 
 func substitutionVariables(unit api.Unit, postBuild map[string]any, store api.ObjectLookup) (map[string]string, error) {

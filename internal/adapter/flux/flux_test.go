@@ -85,6 +85,136 @@ spec:
 	}
 }
 
+func TestTransformAppliesFluxPatchesBeforePostBuildSubstitution(t *testing.T) {
+	unit := mustFluxUnit(t, `apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: app
+spec:
+  patches:
+    - target:
+        group: batch
+        version: v1
+        kind: CronJob
+        name: (configure-harbor|rotate-harbor-robots)
+      patch: |
+        apiVersion: batch/v1
+        kind: CronJob
+        metadata:
+          name: ignored-by-target
+        spec:
+          suspend: true
+          schedule: ${SCHEDULE}
+    - target:
+        group: rbac.authorization.k8s.io
+        version: v1
+        kind: ClusterRole
+        name: tenant-admin
+      patch: |
+        - op: add
+          path: /rules/-
+          value:
+            apiGroups:
+              - harbor.harbor-operator.io
+            resources:
+              - projects
+            verbs:
+              - get
+    - target:
+        group: batch
+        version: v1
+        kind: Job
+        name: bootstrap
+      patch: |
+        $patch: delete
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: bootstrap
+  postBuild:
+    substitute:
+      SCHEDULE: 0 1 * * *
+`)
+	input, err := manifest.Parse([]byte(`apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: configure-harbor
+  namespace: harbor-system
+spec:
+  schedule: "0 0 * * *"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rotate-harbor-robots
+  namespace: harbor-system
+spec:
+  schedule: "0 0 * * *"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bootstrap
+  namespace: harbor-system
+spec: {}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tenant-admin
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	objects, err := (Adapter{}).Transform(unit, []api.RenderResult{{Objects: input}}, lookup{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objects) != 3 {
+		t.Fatalf("expected deleted Job and three remaining objects, got %d", len(objects))
+	}
+	for _, object := range objects[:2] {
+		spec := object.Data["spec"].(map[string]any)
+		if spec["suspend"] != true || spec["schedule"] != "0 1 * * *" {
+			t.Fatalf("expected patched and substituted CronJob, got %#v", spec)
+		}
+	}
+	roleRules := objects[2].Data["rules"].([]any)
+	if len(roleRules) != 2 {
+		t.Fatalf("expected appended Harbor rule, got %#v", roleRules)
+	}
+	harborRule := roleRules[1].(map[string]any)
+	if got := harborRule["apiGroups"].([]any)[0]; got != "harbor.harbor-operator.io" {
+		t.Fatalf("expected Harbor API group, got %v", got)
+	}
+}
+
+func TestTransformRejectsNonInlineFluxPatch(t *testing.T) {
+	unit := mustFluxUnit(t, `apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: app
+spec:
+  patches:
+    - path: patch.yaml
+`)
+
+	_, err := (Adapter{}).Transform(unit, []api.RenderResult{{Objects: []api.Object{
+		mustFluxObject(t, "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: app\n"),
+	}}}, lookup{})
+	if err == nil || !strings.Contains(err.Error(), "Flux patches must be inline") {
+		t.Fatalf("expected inline patch error, got %v", err)
+	}
+}
+
 func mustFluxUnit(t *testing.T, yaml string) api.Unit {
 	t.Helper()
 	return api.Unit{Object: mustFluxObject(t, yaml)}

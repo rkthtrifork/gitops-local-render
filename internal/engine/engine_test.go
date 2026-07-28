@@ -88,6 +88,64 @@ adapters:
 	}
 }
 
+func TestFluxGraphAppliesInlinePatchBeforeRecursiveDiscovery(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "entry.yaml", `apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: parent
+  namespace: flux-system
+spec:
+  sourceRef:
+    kind: GitRepository
+    name: platform
+  path: parent
+  patches:
+    - target:
+        group: kustomize.toolkit.fluxcd.io
+        version: v1
+        kind: Kustomization
+        name: child
+      patch: |
+        - op: replace
+          path: /spec/path
+          value: patched-child
+`)
+	writeFixture(t, root, "source/parent/kustomization.yaml", "resources:\n  - child.yaml\n")
+	writeFixture(t, root, "source/parent/child.yaml", `apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: child
+  namespace: flux-system
+spec:
+  sourceRef:
+    kind: GitRepository
+    name: platform
+  path: original-child
+`)
+	writeFixture(t, root, "source/patched-child/kustomization.yaml", "resources:\n  - namespace.yaml\n")
+	writeFixture(t, root, "source/patched-child/namespace.yaml", "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: patched-child\n")
+	planPath := writeFixture(t, root, "plan.yaml", `apiVersion: gitops-local-render.dev/v1alpha1
+kind: RenderPlan
+entrypoint:
+  path: entry.yaml
+  renderer: raw
+sources:
+  - name: platform
+    path: source
+    selectors:
+      flux:
+        - kind: GitRepository
+          namespace: flux-system
+          name: platform
+`)
+
+	result := runPlan(t, planPath)
+	if len(result.Units) != 2 || !containsObject(result, "Namespace", "patched-child") {
+		t.Fatalf("expected patched child path to be discovered, got units=%v objects=%#v", result.Units, result.Objects)
+	}
+}
+
 func TestArgoAppOfAppsRendersRecursively(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "entry.yaml", `apiVersion: argoproj.io/v1alpha1

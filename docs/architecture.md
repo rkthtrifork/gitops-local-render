@@ -47,7 +47,7 @@ An adapter owns capabilities whose semantics come from a GitOps controller:
 2. **Source addressing:** translate controller-specific references, such as a Flux `sourceRef` or Argo CD `repoURL`, into a generic source query.
 3. **Composition:** produce one or more ordered render requests for a deployment unit.
 4. **Renderer selection:** select Kustomize, raw YAML, Helm, Jsonnet, or a controller plugin based on the controller CR.
-5. **Transformation:** implement controller post-render behavior such as Flux post-build substitution.
+5. **Transformation:** implement controller post-render behavior such as Flux inline patches and post-build substitution.
 6. **Dependency semantics:** translate controller ordering fields into deployment-unit dependencies.
 7. **Recursive generation:** discover child units such as Flux Kustomizations or Argo CD Applications in transformed output.
 8. **State requirements:** request exact objects from the read-only object lookup when controller behavior depends on cluster-like inputs.
