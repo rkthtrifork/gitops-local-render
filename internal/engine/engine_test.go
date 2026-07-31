@@ -146,6 +146,123 @@ sources:
 	}
 }
 
+func TestFluxGraphRendersComponents(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "entry.yaml", `apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: app
+  namespace: flux-system
+spec:
+  sourceRef:
+    kind: GitRepository
+    name: platform
+  path: apps
+  components:
+    - ../components/local
+    - ../components/missing
+  ignoreMissingComponents: true
+`)
+	writeFixture(t, root, "source/apps/kustomization.yaml", "resources:\n  - namespace.yaml\n")
+	writeFixture(t, root, "source/apps/namespace.yaml", "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: app\n")
+	writeFixture(t, root, "source/components/local/kustomization.yaml", "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\nresources:\n  - configmap.yaml\n")
+	writeFixture(t, root, "source/components/local/configmap.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: local\n")
+	planPath := writeFixture(t, root, "plan.yaml", `apiVersion: gitops-local-render.dev/v1alpha1
+kind: RenderPlan
+entrypoint:
+  path: entry.yaml
+  renderer: raw
+sources:
+  - name: platform
+    path: source
+    selectors:
+      flux:
+        - kind: GitRepository
+          namespace: flux-system
+          name: platform
+`)
+
+	result := runPlan(t, planPath)
+	if !containsObject(result, "Namespace", "app") || !containsObject(result, "ConfigMap", "local") {
+		t.Fatalf("expected base and component objects, got %#v", result.Objects)
+	}
+}
+
+func TestFluxGraphUsesUpstreamGeneratorForPlainManifestDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "entry.yaml", `apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: app
+  namespace: flux-system
+spec:
+  sourceRef:
+    kind: GitRepository
+    name: platform
+  path: plain
+  targetNamespace: generated
+  namePrefix: flux-
+  images:
+    - name: example.test/app
+      newTag: v2
+`)
+	writeFixture(t, root, "source/plain/deployment.yaml", `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      containers:
+        - name: app
+          image: example.test/app:v1
+`)
+	planPath := writeFixture(t, root, "plan.yaml", `apiVersion: gitops-local-render.dev/v1alpha1
+kind: RenderPlan
+entrypoint:
+  path: entry.yaml
+  renderer: raw
+sources:
+  - name: platform
+    path: source
+    selectors:
+      flux:
+        - kind: GitRepository
+          namespace: flux-system
+          name: platform
+`)
+
+	result := runPlan(t, planPath)
+	var deployment map[string]any
+	for _, object := range result.Objects {
+		if object.Kind() == "Deployment" && object.Name() == "flux-app" {
+			deployment = object.Data
+			break
+		}
+	}
+	if deployment == nil {
+		t.Fatalf("expected generated Deployment, got %#v", result.Objects)
+	}
+	metadata := deployment["metadata"].(map[string]any)
+	if metadata["namespace"] != "generated" {
+		t.Fatalf("expected target namespace, got %#v", metadata)
+	}
+	template := deployment["spec"].(map[string]any)["template"].(map[string]any)
+	container := template["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	if container["image"] != "example.test/app:v2" {
+		t.Fatalf("expected transformed image, got %#v", container)
+	}
+	if _, err := os.Stat(filepath.Join(root, "source", "plain", "kustomization.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("expected generated Kustomization to remain in memory, got %v", err)
+	}
+}
+
 func TestArgoAppOfAppsRendersRecursively(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "entry.yaml", `apiVersion: argoproj.io/v1alpha1

@@ -1,6 +1,8 @@
 package flux
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,9 +12,110 @@ import (
 
 type lookup map[string]api.Object
 
+type fixedResolver struct {
+	source api.LocalSource
+}
+
+func (r fixedResolver) Resolve(api.SourceQuery) (api.LocalSource, error) {
+	return r.source, nil
+}
+
 func (l lookup) Get(kind, namespace, name string) (api.Object, bool) {
 	object, found := l[kind+"/"+namespace+"/"+name]
 	return object, found
+}
+
+func TestPlanUsesUpstreamFluxKustomizeGenerator(t *testing.T) {
+	root := t.TempDir()
+	writeFluxFile(t, filepath.Join(root, "apps", "base", "kustomization.yaml"), "resources:\n  - namespace.yaml\n")
+	writeFluxFile(t, filepath.Join(root, "apps", "base", "namespace.yaml"), "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: app\n")
+	writeFluxFile(t, filepath.Join(root, "apps", "local", "kustomization.yaml"), "apiVersion: kustomize.config.k8s.io/v1alpha1\nkind: Component\nresources: []\n")
+	unit := mustFluxUnit(t, `apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: app
+  namespace: flux-system
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: platform
+  path: apps/base
+  components:
+    - ../local
+  ignoreMissingComponents: true
+  targetNamespace: generated
+  namePrefix: flux-
+  buildMetadata:
+    - originAnnotations
+`)
+	requests, err := (Adapter{}).Plan(unit, fixedResolver{source: api.LocalSource{Name: "platform", Path: root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0].Kustomize == nil {
+		t.Fatalf("expected one Kustomize request, got %#v", requests)
+	}
+	if requests[0].Renderer != "kustomize" {
+		t.Fatalf("expected explicit Kustomize renderer, got %q", requests[0].Renderer)
+	}
+	options := requests[0].Kustomize
+	if options.KustomizationFile != "kustomization.yaml" {
+		t.Fatalf("unexpected generated Kustomization file: %q", options.KustomizationFile)
+	}
+	generated := string(options.Kustomization)
+	for _, expected := range []string{"namespace: generated", "namePrefix: flux-", "- ../local", "- originAnnotations"} {
+		if !strings.Contains(generated, expected) {
+			t.Fatalf("expected generated Kustomization to contain %q:\n%s", expected, generated)
+		}
+	}
+}
+
+func TestPlanRejectsNonStringComponent(t *testing.T) {
+	root := t.TempDir()
+	writeFluxFile(t, filepath.Join(root, "kustomization.yaml"), "resources: []\n")
+	unit := mustFluxUnit(t, `apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: app
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: platform
+  components:
+    - 42
+`)
+	_, err := (Adapter{}).Plan(unit, fixedResolver{source: api.LocalSource{Name: "platform", Path: root}})
+	if err == nil || !strings.Contains(err.Error(), ".spec.components accessor error") {
+		t.Fatalf("expected component type error, got %v", err)
+	}
+}
+
+func TestPlanRejectsUpstreamGeneratorSourceEscape(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "source")
+	outside := filepath.Join(parent, "outside")
+	writeFluxFile(t, filepath.Join(outside, "kustomization.yaml"), "resources: []\n")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escaped")); err != nil {
+		t.Fatal(err)
+	}
+	unit := mustFluxUnit(t, `apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: app
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: platform
+  path: escaped
+`)
+
+	_, err := (Adapter{}).Plan(unit, fixedResolver{source: api.LocalSource{Name: "platform", Path: root}})
+	if err == nil {
+		t.Fatal("expected upstream generator source escape error")
+	}
 }
 
 func TestTransformUsesFluxPrecedenceAndDisablesPerObject(t *testing.T) {
@@ -85,139 +188,19 @@ spec:
 	}
 }
 
-func TestTransformAppliesFluxPatchesBeforePostBuildSubstitution(t *testing.T) {
-	unit := mustFluxUnit(t, `apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: app
-spec:
-  patches:
-    - target:
-        group: batch
-        version: v1
-        kind: CronJob
-        name: (configure-harbor|rotate-harbor-robots)
-      patch: |
-        apiVersion: batch/v1
-        kind: CronJob
-        metadata:
-          name: ignored-by-target
-        spec:
-          suspend: true
-          schedule: ${SCHEDULE}
-    - target:
-        group: rbac.authorization.k8s.io
-        version: v1
-        kind: ClusterRole
-        name: tenant-admin
-      patch: |
-        - op: add
-          path: /rules/-
-          value:
-            apiGroups:
-              - harbor.harbor-operator.io
-            resources:
-              - projects
-            verbs:
-              - get
-    - target:
-        group: batch
-        version: v1
-        kind: Job
-        name: bootstrap
-      patch: |
-        $patch: delete
-        apiVersion: batch/v1
-        kind: Job
-        metadata:
-          name: bootstrap
-  postBuild:
-    substitute:
-      SCHEDULE: 0 1 * * *
-`)
-	input, err := manifest.Parse([]byte(`apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: configure-harbor
-  namespace: harbor-system
-spec:
-  schedule: "0 0 * * *"
----
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: rotate-harbor-robots
-  namespace: harbor-system
-spec:
-  schedule: "0 0 * * *"
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: bootstrap
-  namespace: harbor-system
-spec: {}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: tenant-admin
-rules:
-  - apiGroups:
-      - ""
-    resources:
-      - pods
-    verbs:
-      - get
-`))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	objects, err := (Adapter{}).Transform(unit, []api.RenderResult{{Objects: input}}, lookup{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(objects) != 3 {
-		t.Fatalf("expected deleted Job and three remaining objects, got %d", len(objects))
-	}
-	for _, object := range objects[:2] {
-		spec := object.Data["spec"].(map[string]any)
-		if spec["suspend"] != true || spec["schedule"] != "0 1 * * *" {
-			t.Fatalf("expected patched and substituted CronJob, got %#v", spec)
-		}
-	}
-	roleRules := objects[2].Data["rules"].([]any)
-	if len(roleRules) != 2 {
-		t.Fatalf("expected appended Harbor rule, got %#v", roleRules)
-	}
-	harborRule := roleRules[1].(map[string]any)
-	if got := harborRule["apiGroups"].([]any)[0]; got != "harbor.harbor-operator.io" {
-		t.Fatalf("expected Harbor API group, got %v", got)
-	}
-}
-
-func TestTransformRejectsNonInlineFluxPatch(t *testing.T) {
-	unit := mustFluxUnit(t, `apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: app
-spec:
-  patches:
-    - path: patch.yaml
-`)
-
-	_, err := (Adapter{}).Transform(unit, []api.RenderResult{{Objects: []api.Object{
-		mustFluxObject(t, "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: app\n"),
-	}}}, lookup{})
-	if err == nil || !strings.Contains(err.Error(), "Flux patches must be inline") {
-		t.Fatalf("expected inline patch error, got %v", err)
-	}
-}
-
 func mustFluxUnit(t *testing.T, yaml string) api.Unit {
 	t.Helper()
 	return api.Unit{Object: mustFluxObject(t, yaml)}
+}
+
+func writeFluxFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func mustFluxObject(t *testing.T, yaml string) api.Object {

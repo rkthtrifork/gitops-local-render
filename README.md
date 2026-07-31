@@ -4,10 +4,12 @@
 
 The initial adapters support:
 
-- Flux `kustomize.toolkit.fluxcd.io/v1` Kustomizations, including `dependsOn`, inline strategic-merge and JSON 6902 patches, strict post-build substitution, `substituteFrom`, inline substitution, substitution strategies, and per-object substitution disabling.
+- Flux `kustomize.toolkit.fluxcd.io/v1` Kustomizations, including `dependsOn`, Kustomize components, `ignoreMissingComponents`, inline strategic-merge and JSON 6902 patches, strict post-build substitution, `substituteFrom`, inline substitution, substitution strategies, and per-object substitution disabling.
 - Argo CD `argoproj.io/v1alpha1` Applications using local Kustomize or raw YAML sources, including multiple sources and app-of-apps recursion.
 
 The executable fails when behavior cannot be reproduced exactly enough. It does not silently fetch sources, read process environment variables, skip required substitutions, or approximate unsupported GitOps features.
+
+Flux pre-build Kustomization generation is delegated to the pinned `github.com/fluxcd/pkg/kustomize` package, and rendering uses its build wrapper around upstream Kustomize. Generated Kustomization files are held in memory and never written into the source checkout.
 
 ## Install
 
