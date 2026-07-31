@@ -12,8 +12,9 @@ import (
 // jailFS permits Kustomize's normal cross-directory bases while preventing a
 // resource from reading or writing outside its declared local source root.
 type jailFS struct {
-	root string
-	disk filesys.FileSystem
+	root     string
+	disk     filesys.FileSystem
+	overlays map[string][]byte
 }
 
 func newJailFS(root string) (*jailFS, error) {
@@ -21,7 +22,7 @@ func newJailFS(root string) (*jailFS, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &jailFS{root: resolved, disk: filesys.MakeFsOnDisk()}, nil
+	return &jailFS{root: resolved, disk: filesys.MakeFsOnDisk(), overlays: map[string][]byte{}}, nil
 }
 
 func (f *jailFS) Create(path string) (filesys.File, error) {
@@ -60,9 +61,16 @@ func (f *jailFS) RemoveAll(path string) error {
 }
 
 func (f *jailFS) Open(path string) (filesys.File, error) {
-	path, err := f.resolveExisting(path)
+	path, err := f.resolveForRead(path)
 	if err != nil {
 		return nil, err
+	}
+	if data, exists := f.overlays[path]; exists {
+		memory := filesys.MakeFsInMemory()
+		if err := memory.WriteFile("/overlay", data); err != nil {
+			return nil, err
+		}
+		return memory.Open("/overlay")
 	}
 	return f.disk.Open(path)
 }
@@ -81,16 +89,25 @@ func (f *jailFS) ReadDir(path string) ([]string, error) {
 }
 
 func (f *jailFS) CleanedAbs(path string) (filesys.ConfirmedDir, string, error) {
-	path, err := f.resolveExisting(path)
+	path, err := f.resolveForRead(path)
 	if err != nil {
 		return "", "", err
+	}
+	if _, exists := f.overlays[path]; exists {
+		return filesys.ConfirmedDir(filepath.Dir(path)), filepath.Base(path), nil
 	}
 	return f.disk.CleanedAbs(path)
 }
 
 func (f *jailFS) Exists(path string) bool {
-	path, err := f.resolveExisting(path)
-	return err == nil && f.disk.Exists(path)
+	path, err := f.resolveForRead(path)
+	if err != nil {
+		return false
+	}
+	if _, exists := f.overlays[path]; exists {
+		return true
+	}
+	return f.disk.Exists(path)
 }
 
 func (f *jailFS) Glob(pattern string) ([]string, error) {
@@ -120,11 +137,34 @@ func (f *jailFS) Glob(pattern string) ([]string, error) {
 }
 
 func (f *jailFS) ReadFile(path string) ([]byte, error) {
-	path, err := f.resolveExisting(path)
+	path, err := f.resolveForRead(path)
 	if err != nil {
 		return nil, err
 	}
+	if data, exists := f.overlays[path]; exists {
+		return append([]byte(nil), data...), nil
+	}
 	return f.disk.ReadFile(path)
+}
+
+func (f *jailFS) overlay(path string, data []byte) error {
+	path, err := f.resolveForWrite(path)
+	if err != nil {
+		return err
+	}
+	f.overlays[path] = append([]byte(nil), data...)
+	return nil
+}
+
+func (f *jailFS) resolveForRead(path string) (string, error) {
+	candidate, err := f.resolveForWrite(path)
+	if err != nil {
+		return "", err
+	}
+	if _, exists := f.overlays[candidate]; exists {
+		return candidate, nil
+	}
+	return f.resolveExisting(path)
 }
 
 func (f *jailFS) WriteFile(path string, data []byte) error {

@@ -6,10 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	fluxkustomize "github.com/fluxcd/pkg/kustomize"
 	"github.com/rkthtrifork/gitops-local-render/internal/manifest"
 	"github.com/rkthtrifork/gitops-local-render/pkg/api"
-	"sigs.k8s.io/kustomize/api/krusty"
-	"sigs.k8s.io/kustomize/api/types"
 )
 
 type Kustomize struct{}
@@ -17,7 +16,11 @@ type Kustomize struct{}
 func (Kustomize) Name() string { return "kustomize" }
 
 func (Kustomize) Capabilities() []api.Capability {
-	return []api.Capability{{Name: "source-jail", Description: "Allows cross-directory bases only within the mapped local source"}}
+	return []api.Capability{
+		{Name: "source-jail", Description: "Allows cross-directory bases only within the mapped local source"},
+		{Name: "manifest-overlay", Description: "Builds an adapter-generated Kustomization without modifying the source"},
+		{Name: "upstream-flux-build", Description: "Uses fluxcd/pkg/kustomize Build around upstream Kustomize"},
+	}
 }
 
 func (Kustomize) Detect(request api.RenderRequest) (bool, error) {
@@ -51,10 +54,10 @@ func (Kustomize) Render(_ context.Context, request api.RenderRequest) ([]api.Obj
 	if err != nil {
 		return nil, fmt.Errorf("create source filesystem: %w", err)
 	}
-	options := krusty.MakeDefaultOptions()
-	options.LoadRestrictions = types.LoadRestrictionsNone
-	kustomizer := krusty.MakeKustomizer(options)
-	resources, err := kustomizer.Run(fs, path)
+	if err := applyKustomizeOptions(fs, path, request.Kustomize); err != nil {
+		return nil, err
+	}
+	resources, err := fluxkustomize.Build(fs, path)
 	if err != nil {
 		return nil, err
 	}
@@ -63,4 +66,18 @@ func (Kustomize) Render(_ context.Context, request api.RenderRequest) ([]api.Obj
 		return nil, fmt.Errorf("serialize Kustomize output: %w", err)
 	}
 	return manifest.Parse(data)
+}
+
+func applyKustomizeOptions(fs *jailFS, path string, options *api.KustomizeOptions) error {
+	if options == nil || len(options.Kustomization) == 0 {
+		return nil
+	}
+	if options.KustomizationFile != "kustomization.yaml" && options.KustomizationFile != "kustomization.yml" && options.KustomizationFile != "Kustomization" {
+		return fmt.Errorf("unrecognized Kustomization file %q", options.KustomizationFile)
+	}
+	kustomizationPath := filepath.Join(path, options.KustomizationFile)
+	if err := fs.overlay(kustomizationPath, options.Kustomization); err != nil {
+		return fmt.Errorf("overlay generated Kustomization %q: %w", kustomizationPath, err)
+	}
+	return nil
 }

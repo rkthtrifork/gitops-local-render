@@ -45,9 +45,9 @@ An adapter owns capabilities whose semantics come from a GitOps controller:
 
 1. **Discovery:** recognize controller resources and turn them into deployment units.
 2. **Source addressing:** translate controller-specific references, such as a Flux `sourceRef` or Argo CD `repoURL`, into a generic source query.
-3. **Composition:** produce one or more ordered render requests for a deployment unit.
+3. **Composition:** produce one or more ordered render requests for a deployment unit, including typed renderer-language inputs such as an upstream-generated Kustomization manifest.
 4. **Renderer selection:** select Kustomize, raw YAML, Helm, Jsonnet, or a controller plugin based on the controller CR.
-5. **Transformation:** implement controller post-render behavior such as Flux inline patches and post-build substitution.
+5. **Transformation:** implement controller post-render behavior such as Flux post-build substitution.
 6. **Dependency semantics:** translate controller ordering fields into deployment-unit dependencies.
 7. **Recursive generation:** discover child units such as Flux Kustomizations or Argo CD Applications in transformed output.
 8. **State requirements:** request exact objects from the read-only object lookup when controller behavior depends on cluster-like inputs.
@@ -62,6 +62,8 @@ ApplicationSet-style generators fit this model as adapter discovery expansion: t
 A renderer owns a configuration-management language independent of the controller that selected it. Current renderers are Kustomize and raw YAML. Helm, Jsonnet, CUE, Carvel ytt, and external commands can be added by registering another implementation.
 
 Renderers receive a confined local source and may not fetch undeclared content. External command support should use a versioned stdin/stdout protocol rather than Go runtime plugins, which require exact compiler and dependency compatibility.
+
+For Flux Kustomizations, the adapter delegates controller-owned pre-build translation to the pinned `github.com/fluxcd/pkg/kustomize` generator. The resulting Kustomization is passed as a typed render option, overlaid only in the jailed in-memory filesystem, and built through Flux's wrapper around upstream Kustomize. This preserves the adapter/renderer boundary without reimplementing Flux fields or mutating the checkout.
 
 ### Services that remain controller-neutral
 

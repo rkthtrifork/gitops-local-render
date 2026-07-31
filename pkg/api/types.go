@@ -94,6 +94,14 @@ type RenderRequest struct {
 	Source    LocalSource
 	Path      string
 	Recursive bool
+	Kustomize *KustomizeOptions
+}
+
+// KustomizeOptions describes Kustomize-language composition requested by an
+// adapter. Paths are relative to RenderRequest.Path.
+type KustomizeOptions struct {
+	KustomizationFile string
+	Kustomization     []byte
 }
 
 type RenderResult struct {
