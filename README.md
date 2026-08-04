@@ -66,6 +66,15 @@ gitops-local-render render --plan render-plan.yaml
 gitops-local-render render --plan render-plan.yaml --output build/all.yaml
 ```
 
+Use `--render-root` when the plan is stored separately from the prepared artifact. All relative entrypoint, source, and seed paths then resolve beneath that explicit directory while retaining normal source confinement:
+
+```sh
+gitops-local-render render \
+  --plan scripts/render-plans/platform.yaml \
+  --render-root build/platform \
+  --output build/platform/all.yaml
+```
+
 `adapters.flux.entrypoint` is optional. It models the bootstrap reconciliation that substitutes top-level Flux Kustomizations before they are discovered. Its references resolve only against explicitly loaded seed objects; normal Flux Kustomizations resolve against seed objects plus objects already rendered into the graph.
 
 Run the container with all referenced local sources mounted beneath the plan’s directory:
@@ -78,6 +87,48 @@ docker run --rm \
 ```
 
 Runnable Flux and Argo CD plans are under [`examples/`](examples/).
+
+## Compare changes
+
+Compare a Git ref with the live worktree to answer what the current staged, unstaged, and untracked edits change in the rendered desired state:
+
+```sh
+gitops-local-render compare \
+  --repo . \
+  --base-ref origin/main \
+  --plan scripts/render-plans/platform.yaml \
+  --prepare 'make build-platform' \
+  --render-root build/platform
+```
+
+The live repository is the head by default and may be dirty. The command never fetches, commits, stashes, switches, resets, or cleans it. It resolves the base ref from the local repository, renders it from a temporary detached worktree, and removes that worktree afterward. `--require-clean` provides an opt-in clean-worktree policy for CI.
+
+Preparation is an explicit shell command executed in both repository roots. The command fails if preparation changes tracked files in the live worktree unless `--allow-prepare-changes` is set. Generated ignored or untracked build artifacts remain supported.
+
+Compare two committed refs without changing the current checkout:
+
+```sh
+gitops-local-render compare \
+  --repo . \
+  --base-ref release/1.4 \
+  --head-ref release/1.5 \
+  --plan render-plan.yaml
+```
+
+The supplied current plan is used for both sides by default, keeping the rendering contract constant. Use `--plan-mode each-ref` when testing an intentional plan migration; in that mode the plan path must exist at the same repository-relative path in both revisions.
+
+Prepared directories can be compared without Git:
+
+```sh
+gitops-local-render compare \
+  --plan render-plan.yaml \
+  --base-workspace build/base \
+  --head-workspace build/head
+```
+
+Comparison is semantic: objects are matched by Kubernetes identity, YAML formatting and map-key order are ignored, and field changes use JSON Pointer paths. Summary output includes producing deployment units. `--format json` emits structured output for CI and agents. Secret `data` and `stringData` changes are reported but their values are always redacted.
+
+Exit status is `0` when the renders are equivalent, `1` when valid desired states differ, and `2` for configuration, Git, preparation, or rendering errors.
 
 ## Strictness and trust boundaries
 

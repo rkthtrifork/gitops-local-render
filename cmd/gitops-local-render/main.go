@@ -23,8 +23,11 @@ var version = "dev"
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		if errors.Is(err, errComparisonDifferent) {
+			os.Exit(1)
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		os.Exit(2)
 	}
 }
 
@@ -36,6 +39,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "render":
 		return runRender(ctx, args[1:], stdout, stderr)
+	case "compare":
+		return runCompare(ctx, args[1:], stdout, stderr)
 	case "capabilities":
 		return runCapabilities(args[1:], stdout)
 	case "version":
@@ -58,6 +63,7 @@ func runRender(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	flags.SetOutput(stderr)
 	planPath := flags.String("plan", "", "path to a RenderPlan")
 	outputPath := flags.String("output", "-", "output YAML path, or - for stdout")
+	renderRoot := flags.String("render-root", "", "directory against which plan paths resolve instead of the plan directory")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -68,7 +74,7 @@ func runRender(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return errors.New("--plan is required")
 	}
 
-	plan, err := config.Load(*planPath)
+	plan, err := config.LoadWithOptions(*planPath, config.LoadOptions{WorkspaceRoot: *renderRoot})
 	if err != nil {
 		return err
 	}
@@ -184,7 +190,9 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, `gitops-local-render renders local GitOps deployment graphs.
 
 Usage:
-  gitops-local-render render --plan PLAN [--output FILE]
+  gitops-local-render render --plan PLAN [--render-root DIR] [--output FILE]
+  gitops-local-render compare --plan PLAN --base-ref REF [options]
+  gitops-local-render compare --plan PLAN --base-workspace DIR --head-workspace DIR [options]
   gitops-local-render capabilities
   gitops-local-render version`)
 }
