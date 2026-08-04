@@ -80,6 +80,14 @@ type StrictOptions struct {
 }
 
 func Load(path string) (*Plan, error) {
+	return LoadWithOptions(path, LoadOptions{})
+}
+
+type LoadOptions struct {
+	WorkspaceRoot string
+}
+
+func LoadWithOptions(path string, options LoadOptions) (*Plan, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve plan path: %w", err)
@@ -96,6 +104,24 @@ func Load(path string) (*Plan, error) {
 		return nil, fmt.Errorf("decode plan: %w", err)
 	}
 	plan.baseDir = filepath.Dir(absPath)
+	if options.WorkspaceRoot != "" {
+		workspaceRoot, err := filepath.Abs(options.WorkspaceRoot)
+		if err != nil {
+			return nil, fmt.Errorf("resolve workspace root: %w", err)
+		}
+		workspaceRoot, err = secureExistingPath(workspaceRoot, ".")
+		if err != nil {
+			return nil, fmt.Errorf("resolve workspace root: %w", err)
+		}
+		info, err := os.Stat(workspaceRoot)
+		if err != nil {
+			return nil, fmt.Errorf("inspect workspace root: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("workspace root %q is not a directory", workspaceRoot)
+		}
+		plan.baseDir = workspaceRoot
+	}
 	if err := plan.normalizeAndValidate(); err != nil {
 		return nil, err
 	}

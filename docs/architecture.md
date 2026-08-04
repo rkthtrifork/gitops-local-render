@@ -35,6 +35,14 @@ initial renderer ──> optional adapter entrypoint transforms ──> adapter 
 
 The core engine owns traversal, ordering, duplicate identity policy, source resolution calls, and output. It does not switch on controller types.
 
+## Comparison architecture
+
+Comparison operates on two fully rendered engine results. It matches Kubernetes objects by API version, kind, namespace, name, and duplicate occurrence; compares their parsed data rather than serialized YAML; and retains the deployment-unit provenance recorded by the engine. Secret value fields are compared through a redacted path that records change without retaining values in the report.
+
+Git-aware comparison is orchestration above this workspace comparison primitive. The live checkout remains in place as the default head, while requested refs are materialized as temporary detached worktrees. Explicit preparation commands run before each render. Git orchestration does not fetch, stash, commit, switch, reset, or clean the caller's checkout.
+
+Render-plan paths may be resolved from an explicit render root. This keeps plans independent of where a prepared artifact is materialized without weakening the existing source jail around each mapped source.
+
 ## Extension contracts
 
 The public contracts in `pkg/api` deliberately separate two extension families.

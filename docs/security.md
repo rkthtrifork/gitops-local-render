@@ -19,8 +19,14 @@ Flux seed objects may include Kubernetes Secrets. Their decoded values are held 
 
 Rendered output can contain substituted secrets. Protect stdout, output files, CI logs, and uploaded artifacts accordingly. Do not commit real Secret seed files or rendered secret output.
 
+Semantic comparison reports changes beneath Secret `data` and `stringData`, but replaces both values with redaction markers in summary and JSON output.
+
 SOPS decryption is not currently implemented. Encrypted Secret data therefore fails normal Secret decoding rather than invoking an implicit external command.
 
 ## Network and execution
 
 Current adapters and renderers perform no source fetches and launch no external configuration-management commands. Future source providers or external renderers must be explicit plan capabilities with documented network and execution boundaries.
+
+The Git-aware comparison command invokes local `git` to resolve refs and manage temporary detached worktrees. It never fetches or changes the caller's current branch. Temporary worktrees are removed on success and failure.
+
+`compare --prepare` is an explicit request to execute a shell command from each workspace. Treat plans and preparation commands as separate trust boundaries: plans remain declarative and cannot request process execution. By default, comparison rejects preparation that changes tracked files in the live worktree.

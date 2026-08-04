@@ -44,6 +44,26 @@ func TestResolveRequiresOneExactSource(t *testing.T) {
 	}
 }
 
+func TestLoadWithWorkspaceRootResolvesPlanPathsFromWorkspace(t *testing.T) {
+	root := t.TempDir()
+	planDirectory := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "manifests.yaml"), "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: test\n")
+	planPath := filepath.Join(planDirectory, "plan.yaml")
+	writeTestFile(t, planPath, `apiVersion: gitops-local-render.dev/v1alpha1
+kind: RenderPlan
+entrypoint:
+  path: manifests.yaml
+`)
+
+	plan, err := LoadWithOptions(planPath, LoadOptions{WorkspaceRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Entrypoint.Path != filepath.Join(root, "manifests.yaml") {
+		t.Fatalf("expected entrypoint beneath workspace, got %q", plan.Entrypoint.Path)
+	}
+}
+
 func writeTestFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {

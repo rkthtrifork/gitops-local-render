@@ -19,8 +19,15 @@ type Engine struct {
 
 type Result struct {
 	Objects []api.Object
+	Records []ObjectRecord
 	Units   []string
 	Skipped []string
+}
+
+type ObjectRecord struct {
+	Object  api.Object
+	Unit    string
+	Sources []string
 }
 
 func New(plan *config.Plan, renderers *render.Registry, adapters ...api.Adapter) (*Engine, error) {
@@ -61,7 +68,7 @@ func (e *Engine) Run(ctx context.Context) (*Result, error) {
 	}
 	result := &Result{}
 	outputIndex := map[api.ObjectKey]int{}
-	if err := e.mergeOutput(result, outputIndex, rootObjects); err != nil {
+	if err := e.mergeOutput(result, outputIndex, rootObjects, "entrypoint", []string{"entrypoint"}); err != nil {
 		return nil, fmt.Errorf("entrypoint output: %w", err)
 	}
 	store.put(rootObjects)
@@ -91,7 +98,13 @@ func (e *Engine) Run(ctx context.Context) (*Result, error) {
 			continue
 		}
 		results := make([]api.RenderResult, 0, len(requests))
+		sources := make([]string, 0, len(requests))
+		seenSources := map[string]struct{}{}
 		for _, request := range requests {
+			if _, seen := seenSources[request.Source.Name]; !seen {
+				sources = append(sources, request.Source.Name)
+				seenSources[request.Source.Name] = struct{}{}
+			}
 			objects, err := e.renderers.Render(ctx, request)
 			if err != nil {
 				return nil, fmt.Errorf("render %s: %w", unit.ID, err)
@@ -102,7 +115,8 @@ func (e *Engine) Run(ctx context.Context) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("transform %s: %w", unit.ID, err)
 		}
-		if err := e.mergeOutput(result, outputIndex, objects); err != nil {
+		sort.Strings(sources)
+		if err := e.mergeOutput(result, outputIndex, objects, unit.ID, sources); err != nil {
 			return nil, fmt.Errorf("output from %s: %w", unit.ID, err)
 		}
 		store.put(objects)
@@ -164,7 +178,7 @@ func (e *Engine) adapterNames() []string {
 	return names
 }
 
-func (e *Engine) mergeOutput(result *Result, index map[api.ObjectKey]int, objects []api.Object) error {
+func (e *Engine) mergeOutput(result *Result, index map[api.ObjectKey]int, objects []api.Object, unit string, sources []string) error {
 	for _, object := range objects {
 		key := object.Key()
 		if object.APIVersion() == "" || key.Kind == "" || key.Name == "" {
@@ -176,12 +190,14 @@ func (e *Engine) mergeOutput(result *Result, index map[api.ObjectKey]int, object
 		}
 		if duplicate && e.plan.Strict.DuplicateObject == "last-wins" {
 			result.Objects[position] = object
+			result.Records[position] = ObjectRecord{Object: object, Unit: unit, Sources: sources}
 			continue
 		}
 		if !duplicate {
 			index[key] = len(result.Objects)
 		}
 		result.Objects = append(result.Objects, object)
+		result.Records = append(result.Records, ObjectRecord{Object: object, Unit: unit, Sources: sources})
 	}
 	return nil
 }
