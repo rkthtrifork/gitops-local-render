@@ -90,34 +90,7 @@ Runnable Flux and Argo CD plans are under [`examples/`](examples/).
 
 ## Compare changes
 
-Compare a Git ref with the live worktree to answer what the current staged, unstaged, and untracked edits change in the rendered desired state:
-
-```sh
-gitops-local-render compare \
-  --repo . \
-  --base-ref origin/main \
-  --plan scripts/render-plans/platform.yaml \
-  --prepare 'make build-platform' \
-  --render-root build/platform
-```
-
-The live repository is the head by default and may be dirty. The command never fetches, commits, stashes, switches, resets, or cleans it. It resolves the base ref from the local repository, renders it from a temporary detached worktree, and removes that worktree afterward. `--require-clean` provides an opt-in clean-worktree policy for CI.
-
-Preparation is an explicit shell command executed in both repository roots. The command fails if preparation changes tracked files in the live worktree unless `--allow-prepare-changes` is set. Generated ignored or untracked build artifacts remain supported.
-
-Compare two committed refs without changing the current checkout:
-
-```sh
-gitops-local-render compare \
-  --repo . \
-  --base-ref release/1.4 \
-  --head-ref release/1.5 \
-  --plan render-plan.yaml
-```
-
-The supplied current plan is used for both sides by default, keeping the rendering contract constant. Use `--plan-mode each-ref` when testing an intentional plan migration; in that mode the plan path must exist at the same repository-relative path in both revisions.
-
-Prepared directories can be compared without Git:
+Compare two prepared workspaces without involving Git or a repository-specific build system:
 
 ```sh
 gitops-local-render compare \
@@ -126,9 +99,19 @@ gitops-local-render compare \
   --head-workspace build/head
 ```
 
-Comparison is semantic: objects are matched by Kubernetes identity, YAML formatting and map-key order are ignored, and field changes use JSON Pointer paths. Summary output includes producing deployment units. `--format json` emits structured output for CI and agents. Secret `data` and `stringData` changes are reported but their values are always redacted.
+Use `--render-root` when both workspaces contain the prepared artifact below a shared relative directory:
 
-Exit status is `0` when the renders are equivalent, `1` when valid desired states differ, and `2` for configuration, Git, preparation, or rendering errors.
+```sh
+gitops-local-render compare \
+  --plan scripts/render-plans/platform.yaml \
+  --base-workspace build/base \
+  --head-workspace build/head \
+  --render-root build/platform
+```
+
+Comparison is semantic: objects are matched by Kubernetes identity, YAML formatting and map-key order are ignored, and field changes use JSON Pointer paths. Summary output includes producing deployment units. `--format json` emits structured output for CI and agents. Secret `data` and `stringData` changes are reported but their values are always redacted. Preparing the two directories—including creating Git worktrees, if desired—is the caller's responsibility.
+
+Exit status is `0` when the renders are equivalent, `1` when valid desired states differ, and `2` for configuration or rendering errors.
 
 ## Strictness and trust boundaries
 
