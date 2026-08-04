@@ -27,6 +27,4 @@ SOPS decryption is not currently implemented. Encrypted Secret data therefore fa
 
 Current adapters and renderers perform no source fetches and launch no external configuration-management commands. Future source providers or external renderers must be explicit plan capabilities with documented network and execution boundaries.
 
-The Git-aware comparison command invokes local `git` to resolve refs and manage temporary detached worktrees. It never fetches or changes the caller's current branch. Temporary worktrees are removed on success and failure.
-
-`compare --prepare` is an explicit request to execute a shell command from each workspace. Treat plans and preparation commands as separate trust boundaries: plans remain declarative and cannot request process execution. By default, comparison rejects preparation that changes tracked files in the live worktree.
+Comparison reads the two caller-provided workspaces and does not invoke Git or execute preparation commands. Callers are responsible for creating and securing those workspaces before rendering.

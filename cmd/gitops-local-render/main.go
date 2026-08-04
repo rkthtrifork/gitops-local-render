@@ -191,7 +191,6 @@ func printUsage(output io.Writer) {
 
 Usage:
   gitops-local-render render --plan PLAN [--render-root DIR] [--output FILE]
-  gitops-local-render compare --plan PLAN --base-ref REF [options]
   gitops-local-render compare --plan PLAN --base-workspace DIR --head-workspace DIR [options]
   gitops-local-render capabilities
   gitops-local-render version`)
